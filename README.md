@@ -24,9 +24,12 @@ Prerequisites:
 From the repository root:
 
 ```bash
-uv sync --all-extras
-uv run mdb-sync capture
+uv sync --all-extras --no-editable
+uv run --no-editable mdb-sync capture
 ```
+
+The `--no-editable` option is required on both commands. It avoids a Homebrew
+Python issue where hidden editable-install `.pth` files are skipped.
 
 The command prints progress for every completed request. When it finishes, it
 prints a path similar to:
@@ -40,19 +43,19 @@ Please return that ZIP file.
 For a gentler request rate:
 
 ```bash
-uv run mdb-sync capture --delay 0.1
+uv run --no-editable mdb-sync capture --delay 0.1
 ```
 
 For a different output location:
 
 ```bash
-uv run mdb-sync capture --output /path/to/output
+uv run --no-editable mdb-sync capture --output /path/to/output
 ```
 
 The known base URL is the default. It can still be overridden:
 
 ```bash
-uv run mdb-sync --base-url https://another-host.example capture
+uv run --no-editable mdb-sync --base-url https://another-host.example capture
 ```
 
 ## What the comprehensive capture traverses
@@ -106,7 +109,7 @@ from captures.
 ## Useful options
 
 ```bash
-uv run mdb-sync capture \
+uv run --no-editable mdb-sync capture \
   --page-size 100 \
   --timeout 120 \
   --retries 3 \
@@ -122,22 +125,22 @@ without confirmation from the STS owners.
 To test only model discovery:
 
 ```bash
-uv run mdb-sync models --limit 10
+uv run --no-editable mdb-sync models --limit 10
 ```
 
 ## Development
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --no-editable
 just check
 ```
 
 Individual checks:
 
 ```bash
-uv run ruff check src tests
-uv run basedpyright src tests
-uv run pytest tests -v
+uv run --no-editable ruff check src tests
+uv run --no-editable basedpyright src tests
+uv run --no-editable pytest tests -v
 ```
 
 ## Project layout
@@ -151,4 +154,3 @@ src/mdb_sync/cli.py       models and capture commands
 tests/                    Mock-server traversal and client tests
 adr/                      Architecture decisions
 ```
-

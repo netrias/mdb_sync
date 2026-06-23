@@ -1,25 +1,25 @@
 set dotenv-load := true
 
 sync:
-    uv sync --all-extras
+    uv sync --all-extras --no-editable
 
 fetch-models *args:
-    uv run mdb-sync models {{args}}
+    uv run --no-editable mdb-sync models {{args}}
 
 capture *args:
-    uv run mdb-sync capture {{args}}
+    uv run --no-editable mdb-sync capture {{args}}
 
 lint:
-    uv run ruff check src tests
+    uv run --no-editable ruff check src tests
 
 format:
-    uv run ruff format src tests
+    uv run --no-editable ruff format src tests
 
 typecheck:
-    uv run basedpyright src tests
+    uv run --no-editable basedpyright src tests
 
 test:
-    uv run pytest tests -v
+    uv run --no-editable pytest tests -v
 
 check: lint typecheck test
 
