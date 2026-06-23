@@ -2,45 +2,90 @@
 
 ## Current scope
 
-This repository currently verifies that the MDB STS API is reachable and that
-its model-discovery response matches the supplied OpenAPI contract.
+This repository captures the protected STS v2 API into an offline development
+dataset. It does not yet transform or write data to the Data Model Store.
 
 ```text
 CLI
-  -> STSClient
-      -> GET /v2/models/
-          -> validated list[Model]
-              -> formatted JSON output
+  -> STSCrawler
+      -> RecordingSTSClient
+          -> STSClient (/v2 only)
+          -> CaptureWriter
+              -> requests.jsonl
+              -> exact response bodies
+              -> inventory.json
+              -> manifest.json
+              -> ZIP archive
 ```
 
 ## Module responsibilities
 
 | Module | Responsibility |
 | --- | --- |
-| `mdb_sync.cli` | Read configuration and expose the initial manual test command |
-| `mdb_sync.client` | Own HTTP behavior, pagination, timeouts, and error translation |
-| `mdb_sync.models` | Validate external STS response data |
+| `mdb_sync.cli` | Configuration, progress output, and colleague-facing commands |
+| `mdb_sync.client` | HTTP session and strict `/v2/` path boundary |
+| `mdb_sync.capture` | Retries, durable response recording, sanitization, manifest, and archive |
+| `mdb_sync.crawler` | Discover parameters and traverse dependent STS resources |
+| `mdb_sync.models` | Validate the small interactive model-list command |
 
-## Key decisions
+## Traversal flow
 
-- The base URL is runtime configuration because it is absent from the supplied
-  API artifacts.
-- The client starts with model discovery, which is step 1 of `plan.md`.
-- HTTP and validation details stay outside the CLI so later Lambda, Fargate, or
-  scheduled-job entry points can reuse the same client.
-- Unknown response fields are retained by the Pydantic model, allowing additive
-  server changes without immediately breaking the probe.
+```text
+models
+  -> versions
+      -> nodes
+          -> properties
+              -> terms
+              -> model PVs
+                  -> CDE IDs/versions
+                      -> CDE PVs
 
-## Next planned extension
+tags
+  -> values
+      -> tagged entities
 
-After connectivity is confirmed, add methods for model versions, nodes,
-properties, and terms. Transformation and database ingestion should follow only
-after property-key uniqueness and the authoritative permissible-value endpoint
-are confirmed.
+all discovered nanoids
+  -> entity-by-id
+```
 
-## Infrastructure
+Counts and individual detail endpoints are called alongside list endpoints.
+Endpoint parameters that cannot be inferred from returned data are recorded as
+skipped rather than fabricated.
 
-No AWS infrastructure is included in this first slice. The plan explicitly
-leaves Lambda versus ECS/Fargate open, and an API connectivity probe does not
-need deployed infrastructure.
+## Capture design
+
+Responses are stored as exact bytes rather than only transformed JSON. This
+preserves undocumented fields, null behavior, errors, content types, and other
+details needed to build realistic fixtures later.
+
+The JSON Lines request log maps each body to request metadata and supports
+streaming analysis even when a capture is large. The inventory provides a
+smaller navigation index without replacing raw responses.
+
+Sensitive headers are removed. Response hashes allow archive integrity and
+duplicate-response analysis.
+
+## Operational decisions
+
+- Requests are sequential by default because this is an exploratory sweep of a
+  protected upstream service.
+- Every path is checked in the client and must start with `/v2/`.
+- Pagination defaults to 100 records per request.
+- Retryable failures use bounded exponential backoff.
+- Non-success HTTP responses are captured and traversal continues where
+  possible.
+- Python 3.12 is pinned to align with the intended AWS runtime and repository
+  standards.
+
+## Deferred work
+
+The offline captures will inform:
+
+- authoritative permissible-value endpoint selection;
+- property-key uniqueness rules;
+- response models for all entity types;
+- snapshot transformation and validation;
+- database ingestion and idempotency;
+- Lambda versus ECS/Fargate deployment;
+- checkpointing and incremental synchronization.
 

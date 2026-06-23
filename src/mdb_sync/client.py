@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -17,13 +17,13 @@ class STSClientError(RuntimeError):
 
 
 class STSClient:
-    """Small typed wrapper around the STS endpoints needed by the first sync step."""
+    """Typed and raw access to the STS v2 API."""
 
     def __init__(
         self,
         base_url: str,
         *,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 60.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         normalized_base_url = base_url.strip().rstrip("/")
@@ -51,13 +51,28 @@ class STSClient:
     def close(self) -> None:
         self._client.close()
 
+    @property
+    def base_url(self) -> str:
+        return str(self._client.base_url).rstrip("/")
+
+    def get_v2(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Send a GET request, refusing any path outside the v2 API."""
+        if not path.startswith("/v2/"):
+            raise ValueError(f"STS requests must use a /v2/ path: {path}")
+        return self._client.get(path, params=params)
+
     def list_models(self, *, skip: int = 0, limit: int = 0) -> list[Model]:
         """Return available MDB models."""
         if skip < 0 or limit < 0:
             raise ValueError("skip and limit must be non-negative")
 
         try:
-            response = self._client.get(
+            response = self.get_v2(
                 "/v2/models/",
                 params={"skip": skip, "limit": limit},
             )

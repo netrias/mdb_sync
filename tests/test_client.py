@@ -62,3 +62,14 @@ def test_list_models_rejects_negative_pagination() -> None:
         pytest.raises(ValueError, match="non-negative"),
     ):
         client.list_models(skip=-1)
+
+
+def test_raw_client_refuses_non_v2_paths() -> None:
+    with (
+        STSClient(
+            "https://sts.cancer.gov",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+        ) as client,
+        pytest.raises(ValueError, match="/v2/"),
+    ):
+        client.get_v2("/")

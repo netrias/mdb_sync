@@ -6,6 +6,9 @@ sync:
 fetch-models *args:
     uv run mdb-sync models {{args}}
 
+capture *args:
+    uv run mdb-sync capture {{args}}
+
 lint:
     uv run ruff check src tests
 
@@ -22,4 +25,3 @@ check: lint typecheck test
 
 clean:
     rm -rf build/ dist/ .pytest_cache/ .ruff_cache/ .basedpyright/ htmlcov/
-

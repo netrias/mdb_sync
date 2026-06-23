@@ -1,58 +1,129 @@
-# MDB Sync
+# MDB STS Capture
 
-Initial Python client for testing access to the MDB Simple Terminology Server
-(STS). This first slice calls `GET /v2/models/`, validates the response, and
-prints the available models as JSON.
+Python tooling for capturing the MDB Simple Terminology Server (STS) API for
+offline synchronization development. The capture command performs a
+data-driven traversal of the STS and writes every attempted request and exact
+response body into a portable ZIP archive.
 
-The STS base URL is not present in `openapi.json` or the supplied Swagger PDF,
-so it is configuration rather than source code.
+The configured server is:
 
-## Prerequisites
+```text
+https://sts.cancer.gov
+```
 
-- Python 3.12 or newer
+The client enforces `/v2/` paths and never calls the unversioned root endpoint.
+
+## Someone with firewall access has to run the following
+
+Prerequisites:
+
+- Python 3.12
 - [uv](https://docs.astral.sh/uv/)
-- [just](https://just.systems/) (optional convenience runner)
+- Network access to `https://sts.cancer.gov`
 
-## Quick start
+From the repository root:
 
 ```bash
 uv sync --all-extras
-cp .env.example .env
+uv run mdb-sync capture
 ```
 
-Replace the example URL in `.env`, then run:
+The command prints progress for every completed request. When it finishes, it
+prints a path similar to:
+
+```text
+Return this archive: captures/sts-capture-20260623T140000Z.zip
+```
+
+Please return that ZIP file.
+
+For a gentler request rate:
 
 ```bash
-uv run mdb-sync models
+uv run mdb-sync capture --delay 0.1
 ```
 
-Without an `.env` file:
+For a different output location:
 
 ```bash
-uv run mdb-sync --base-url https://actual-sts-host.example models
+uv run mdb-sync capture --output /path/to/output
 ```
 
-Pagination parameters can be passed directly:
+The known base URL is the default. It can still be overridden:
 
 ```bash
-uv run mdb-sync models --skip 0 --limit 10
+uv run mdb-sync --base-url https://another-host.example capture
 ```
 
-If `just` is installed, the equivalent command is:
+## What the comprehensive capture traverses
+
+The crawler starts from model and tag discovery, then supplies discovered
+parameters to dependent endpoints:
+
+- model list and count;
+- model versions and latest-version metadata;
+- nodes, node counts, and node details;
+- properties, property counts, and property details;
+- terms, term counts, and individual term-value lookups;
+- model/property PV and synonym responses;
+- tags, tag values, tagged entities, and counts;
+- direct `/v2/id/{id}` lookups for every discovered nanoid;
+- CDE PV responses when terms expose both `origin_id` and `origin_version`.
+
+List endpoints are paginated with `skip` and `limit`. Traversal is sequential
+to avoid placing unnecessary concurrent load on the protected server.
+Transient HTTP statuses (`429`, `500`, `502`, `503`, and `504`) and connection
+failures are retried with exponential backoff.
+
+Some `404` responses are expected, particularly for properties that do not use
+an acceptable value set. They are retained because error behavior is part of
+the API contract we need to understand.
+
+## Capture contents
+
+Each timestamped capture contains:
+
+```text
+manifest.json       Run metadata, status totals, endpoint coverage, and skips
+requests.jsonl      One metadata record per attempted logical request
+inventory.json      Discovered model/version/node/property and tag inventory
+responses/          Exact response bodies, numbered to match requests.jsonl
+openapi.json        The OpenAPI document used during development
+```
+
+`requests.jsonl` includes:
+
+- request URL, path, query parameters, and logical endpoint name;
+- HTTP status or connection error;
+- elapsed time and retry-attempt count;
+- sanitized response headers;
+- response byte count and SHA-256 hash;
+- path to the corresponding exact response body.
+
+Authorization, cookie, proxy-authorization, and set-cookie headers are excluded
+from captures.
+
+## Useful options
 
 ```bash
-just fetch-models --limit 10
+uv run mdb-sync capture \
+  --page-size 100 \
+  --timeout 120 \
+  --retries 3 \
+  --retry-backoff 1 \
+  --delay 0
 ```
 
-## Configuration
+Use `--quiet` to suppress per-request progress. Avoid raising `--page-size`
+without confirmation from the STS owners.
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `MDB_API_BASE_URL` | Yes, unless `--base-url` is used | STS scheme and host, without an endpoint path |
+## Small connectivity test
 
-The supplied OpenAPI specification defines no authentication scheme. If the
-deployed service requires authentication, add it to `STSClient` after the MDB
-team provides the contract.
+To test only model discovery:
+
+```bash
+uv run mdb-sync models --limit 10
+```
 
 ## Development
 
@@ -72,14 +143,12 @@ uv run pytest tests -v
 ## Project layout
 
 ```text
-src/mdb_sync/client.py   Typed STS HTTP client
-src/mdb_sync/models.py   Response models derived from openapi.json
-src/mdb_sync/cli.py      Local API probe
-tests/                   Unit tests using an in-memory HTTP transport
-adr/                     Architecture decisions
+src/mdb_sync/client.py    HTTP client with strict /v2 path enforcement
+src/mdb_sync/capture.py   Response recorder, retries, manifest, and ZIP output
+src/mdb_sync/crawler.py   Data-driven comprehensive STS traversal
+src/mdb_sync/models.py    Typed model-discovery response
+src/mdb_sync/cli.py       models and capture commands
+tests/                    Mock-server traversal and client tests
+adr/                      Architecture decisions
 ```
-
-AWS deployment and database ingestion are intentionally deferred. The plan
-does not yet establish the execution platform, database interface, credentials,
-or source API authentication, and none are required to verify STS connectivity.
 

@@ -14,4 +14,4 @@ dist/
 .terraform/
 *.tfstate
 *.tfstate.*
-
+captures/
