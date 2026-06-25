@@ -66,15 +66,20 @@ class STSClient:
             raise ValueError(f"STS requests must use a /v2/ path: {path}")
         return self._client.get(path, params=params)
 
-    def list_models(self, *, skip: int = 0, limit: int = 0) -> list[Model]:
+    def list_models(self, *, skip: int = 0, limit: int | None = None) -> list[Model]:
         """Return available MDB models."""
-        if skip < 0 or limit < 0:
+        if skip < 0 or (limit is not None and limit < 0):
             raise ValueError("skip and limit must be non-negative")
+        params: dict[str, int] = {}
+        if skip:
+            params["skip"] = skip
+        if limit is not None:
+            params["limit"] = limit
 
         try:
             response = self.get_v2(
                 "/v2/models/",
-                params={"skip": skip, "limit": limit},
+                params=params or None,
             )
             response.raise_for_status()
             return _MODELS_ADAPTER.validate_json(response.content)

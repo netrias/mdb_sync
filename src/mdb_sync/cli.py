@@ -12,6 +12,17 @@ from mdb_sync.client import STSClient, STSClientError
 from mdb_sync.crawler import STSCrawler
 
 DEFAULT_BASE_URL = "https://sts.cancer.gov"
+DIAGNOSTIC_PATHS = (
+    ("/v2/models/count", None),
+    ("/v2/models/", None),
+    ("/v2/models/", {"skip": 0}),
+    ("/v2/models/", {"limit": 0}),
+    ("/v2/models/", {"skip": 0, "limit": 0}),
+    ("/v2/models/", {"skip": 0, "limit": 10}),
+    ("/v2/tags/count", None),
+    ("/docs", None),
+    ("/openapi.json", None),
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -28,8 +39,12 @@ def _parser() -> argparse.ArgumentParser:
     models_parser.add_argument(
         "--limit",
         type=int,
-        default=0,
-        help="Maximum models to request; zero uses the API default.",
+        default=None,
+        help="Maximum models to request. Omit to use the API default.",
+    )
+    subparsers.add_parser(
+        "diagnose",
+        help="Probe STS endpoint shapes and print status/body snippets for troubleshooting.",
     )
     capture_parser = subparsers.add_parser(
         "capture",
@@ -78,9 +93,56 @@ def _print_progress(result: CaptureResult) -> None:
     )
 
 
+def _body_snippet(response_text: str, *, limit: int = 500) -> str:
+    compact = " ".join(response_text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."
+
+
+def _run_diagnostics(base_url: str) -> int:
+    import httpx
+
+    exit_code = 0
+    with httpx.Client(
+        base_url=base_url.rstrip("/"),
+        timeout=30.0,
+        follow_redirects=True,
+        headers={"Accept": "application/json", "User-Agent": "mdb-sync/0.1.0"},
+    ) as client:
+        for path, params in DIAGNOSTIC_PATHS:
+            try:
+                response = client.get(path, params=params)
+            except httpx.RequestError as error:
+                exit_code = 1
+                print(f"ERROR {path} params={params}: {type(error).__name__}: {error}")
+                continue
+
+            if response.status_code >= 500:
+                exit_code = 1
+            print(
+                json.dumps(
+                    {
+                        "path": path,
+                        "params": params,
+                        "url": str(response.url),
+                        "status_code": response.status_code,
+                        "content_type": response.headers.get("content-type"),
+                        "body_snippet": _body_snippet(response.text),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+    return exit_code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "diagnose":
+            return _run_diagnostics(args.base_url)
+
         if args.command == "models":
             with STSClient(args.base_url) as client:
                 models = client.list_models(skip=args.skip, limit=args.limit)

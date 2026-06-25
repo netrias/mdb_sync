@@ -31,6 +31,27 @@ def test_list_models_parses_response_and_sends_pagination() -> None:
     assert models[0].is_latest_version is True
 
 
+def test_list_models_omits_optional_query_params_by_default() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/models/"
+        assert dict(request.url.params) == {}
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "type": "Model",
+                    "handle": "gc",
+                    "is_latest_version": True,
+                }
+            ],
+        )
+
+    with STSClient("https://sts.example.org/", transport=httpx.MockTransport(handler)) as client:
+        models = client.list_models()
+
+    assert len(models) == 1
+
+
 def test_list_models_reports_http_errors() -> None:
     transport = httpx.MockTransport(
         lambda request: httpx.Response(503, json={"detail": "temporarily unavailable"})
@@ -62,6 +83,17 @@ def test_list_models_rejects_negative_pagination() -> None:
         pytest.raises(ValueError, match="non-negative"),
     ):
         client.list_models(skip=-1)
+
+
+def test_list_models_rejects_negative_limit() -> None:
+    with (
+        STSClient(
+            "https://sts.example.org",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])),
+        ) as client,
+        pytest.raises(ValueError, match="non-negative"),
+    ):
+        client.list_models(limit=-1)
 
 
 def test_raw_client_refuses_non_v2_paths() -> None:

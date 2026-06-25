@@ -128,6 +128,16 @@ To test only model discovery:
 uv run --no-editable mdb-sync models --limit 10
 ```
 
+If that returns a server error, collect diagnostics:
+
+```bash
+uv run --no-editable mdb-sync diagnose > sts-diagnostics.jsonl
+```
+
+Send back `sts-diagnostics.jsonl`. It compares the same model endpoint with
+and without optional query parameters and includes status/body snippets for
+related low-risk endpoints.
+
 ## Development
 
 ```bash
