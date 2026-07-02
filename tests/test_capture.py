@@ -138,6 +138,10 @@ def test_crawler_captures_full_discoverable_traversal(tmp_path: Path) -> None:
         crawler = STSCrawler(
             RecordingSTSClient(client, writer, retries=0),
             page_size=100,
+            capture_term_details=True,
+            capture_tags=True,
+            capture_ids=True,
+            capture_cde_pvs=True,
         )
         inventory = crawler.run()
 
@@ -180,3 +184,127 @@ def test_crawler_captures_full_discoverable_traversal(tmp_path: Path) -> None:
     assert manifest["api_scope"] == "/v2 only"
     assert manifest["request_count"] == len(expected_paths)
     assert manifest["statuses"] == {"200": len(expected_paths)}
+
+
+def test_crawler_first_pass_skips_high_volume_dependent_traversal(tmp_path: Path) -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        requested_paths.append(path)
+        assert path.startswith("/v2/")
+
+        responses: dict[str, object] = {
+            "/v2/models/count": 1,
+            "/v2/models/": [
+                {
+                    "type": "Model",
+                    "handle": "gc",
+                    "version": "1.0",
+                    "nanoid": "model-id",
+                    "name": "GC",
+                    "is_latest_version": True,
+                }
+            ],
+            "/v2/model/gc/latest-version": {
+                "type": "Model",
+                "handle": "gc",
+                "version": "1.0",
+                "nanoid": "model-id",
+                "name": "GC",
+                "is_latest_version": True,
+            },
+            "/v2/model/gc/versions": ["1.0"],
+            "/v2/model/gc/version/1.0/nodes/count": 1,
+            "/v2/model/gc/version/1.0/nodes": [
+                {
+                    "type": "Node",
+                    "handle": "participant",
+                    "version": "1.0",
+                    "nanoid": "node-id",
+                    "model": "gc",
+                }
+            ],
+            "/v2/model/gc/version/1.0/node/participant": {
+                "type": "Node",
+                "handle": "participant",
+                "version": "1.0",
+                "nanoid": "node-id",
+                "model": "gc",
+            },
+            "/v2/model/gc/version/1.0/node/participant/properties/count": 1,
+            "/v2/model/gc/version/1.0/node/participant/properties": [
+                {
+                    "type": "Property",
+                    "handle": "sex",
+                    "version": "1.0",
+                    "nanoid": "property-id",
+                    "model": "gc",
+                    "value_domain": "value_set",
+                }
+            ],
+            "/v2/model/gc/version/1.0/node/participant/property/sex": {
+                "type": "Property",
+                "handle": "sex",
+                "version": "1.0",
+                "nanoid": "property-id",
+                "model": "gc",
+                "value_domain": "value_set",
+            },
+            "/v2/model/gc/version/1.0/node/participant/property/sex/terms/count": 1,
+            "/v2/model/gc/version/1.0/node/participant/property/sex/terms": [
+                {
+                    "type": "Term",
+                    "value": "Female",
+                    "origin_name": "caDSR",
+                    "origin_id": "123",
+                    "origin_version": "2",
+                    "nanoid": "term-id",
+                }
+            ],
+            "/v2/terms/model-pvs/gc/sex": [
+                {
+                    "model": "gc",
+                    "property": "sex",
+                    "version": "1.0",
+                    "permissibleValues": [{"value": "Female"}],
+                }
+            ],
+        }
+        return httpx.Response(200, json=responses[path])
+
+    writer = CaptureWriter(
+        tmp_path,
+        base_url="https://sts.cancer.gov",
+        page_size=100,
+    )
+    with STSClient(
+        "https://sts.cancer.gov",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        crawler = STSCrawler(
+            RecordingSTSClient(client, writer, retries=0),
+            page_size=100,
+        )
+        inventory = crawler.run()
+
+    writer.write_inventory(inventory)
+    capture_dir, _archive = writer.finalize()
+
+    unexpected_paths = {
+        "/v2/model/gc/version/1.0/node/participant/property/sex/term/Female",
+        "/v2/tags/count",
+        "/v2/tags/",
+        "/v2/terms/cde-pvs/123/2/pvs",
+        "/v2/id/model-id",
+    }
+    assert unexpected_paths.isdisjoint(requested_paths)
+    assert "/v2/terms/model-pvs/gc/sex" in requested_paths
+    assert inventory["options"]["capture_term_details"] is False
+    assert inventory["discovered_nanoids"] == ["model-id", "node-id", "property-id", "term-id"]
+
+    manifest = json.loads((capture_dir / "manifest.json").read_text())
+    skipped_endpoints = {item["endpoint"] for item in manifest["skipped"]}
+    assert {"cde_permissible_values", "entity_by_id", "tags", "term_detail"}.issubset(
+        skipped_endpoints
+    )

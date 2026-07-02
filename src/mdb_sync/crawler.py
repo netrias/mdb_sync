@@ -29,6 +29,11 @@ class STSCrawler:
         *,
         page_size: int = 100,
         max_pages: int = 100_000,
+        capture_term_details: bool = False,
+        capture_tags: bool = False,
+        capture_ids: bool = False,
+        capture_cde_pvs: bool = False,
+        capture_model_pvs: bool = True,
     ) -> None:
         if page_size <= 0:
             raise ValueError("page_size must be positive")
@@ -37,6 +42,11 @@ class STSCrawler:
         self._client = client
         self._page_size = page_size
         self._max_pages = max_pages
+        self._capture_term_details = capture_term_details
+        self._capture_tags_enabled = capture_tags
+        self._capture_ids_enabled = capture_ids
+        self._capture_cde_pvs_enabled = capture_cde_pvs
+        self._capture_model_pvs_enabled = capture_model_pvs
         self._seen_nanoids: set[str] = set()
         self._cde_candidates: set[tuple[str, str]] = set()
         self.inventory: dict[str, Any] = {
@@ -45,21 +55,73 @@ class STSCrawler:
             "discovered_nanoids": [],
             "cde_candidates": [],
             "notes": [
-                "All discoverable /v2 endpoints were attempted.",
+                "Bounded first-pass capture is the default.",
                 "404 responses for properties without acceptable values are expected.",
             ],
+            "options": {
+                "capture_cde_pvs": self._capture_cde_pvs_enabled,
+                "capture_ids": self._capture_ids_enabled,
+                "capture_model_pvs": self._capture_model_pvs_enabled,
+                "capture_tags": self._capture_tags_enabled,
+                "capture_term_details": self._capture_term_details,
+                "max_pages": self._max_pages,
+                "page_size": self._page_size,
+            },
         }
 
     def run(self) -> dict[str, Any]:
+        self._record_disabled_features()
         self._capture_models()
-        self._capture_tags()
-        self._capture_cde_permissible_values()
-        self._capture_ids()
+        if self._capture_tags_enabled:
+            self._capture_tags()
+        if self._capture_cde_pvs_enabled:
+            self._capture_cde_permissible_values()
+        if self._capture_ids_enabled:
+            self._capture_ids()
+        return self.current_inventory()
+
+    def current_inventory(self, *, incomplete_reason: str | None = None) -> dict[str, Any]:
+        """Return the best currently known inventory, including partial runs."""
+
         self.inventory["discovered_nanoids"] = sorted(self._seen_nanoids)
         self.inventory["cde_candidates"] = [
             {"id": cde_id, "version": version} for cde_id, version in sorted(self._cde_candidates)
         ]
+        if incomplete_reason is not None:
+            self.inventory["incomplete"] = True
+            self.inventory["reason"] = incomplete_reason
         return self.inventory
+
+    def _record_disabled_features(self) -> None:
+        if not self._capture_term_details:
+            self._client.record_skip(
+                endpoint="term_detail",
+                reason=(
+                    "Skipped by bounded capture mode. Enable with --include-term-details "
+                    "or --profile comprehensive."
+                ),
+            )
+        if not self._capture_tags_enabled:
+            self._client.record_skip(
+                endpoint="tags",
+                reason="Skipped by bounded capture mode. Enable with --include-tags.",
+            )
+        if not self._capture_cde_pvs_enabled:
+            self._client.record_skip(
+                endpoint="cde_permissible_values",
+                reason=(
+                    "Skipped by bounded capture mode. Enable with --include-cde-pvs "
+                    "or --profile comprehensive."
+                ),
+            )
+        if not self._capture_ids_enabled:
+            self._client.record_skip(
+                endpoint="entity_by_id",
+                reason=(
+                    "Skipped by bounded capture mode. Enable with --include-ids "
+                    "or --profile comprehensive."
+                ),
+            )
 
     def _capture_models(self) -> None:
         self._get("models_count", "/v2/models/count")
@@ -162,7 +224,7 @@ class STSCrawler:
         for term in terms:
             self._remember_nanoid(term)
             term_value = _identifier(term, "value")
-            if term_value is not None:
+            if self._capture_term_details and term_value is not None:
                 self._get(
                     "term_detail",
                     f"{property_prefix}/term/{_segment(term_value)}",
@@ -172,11 +234,12 @@ class STSCrawler:
             if origin_id is not None and origin_version is not None:
                 self._cde_candidates.add((origin_id, origin_version))
 
-        self._get_all_pages(
-            "model_permissible_values",
-            f"/v2/terms/model-pvs/{_segment(model)}/{_segment(property_handle)}",
-            base_params={"version": version},
-        )
+        if self._capture_model_pvs_enabled:
+            self._get_all_pages(
+                "model_permissible_values",
+                f"/v2/terms/model-pvs/{_segment(model)}/{_segment(property_handle)}",
+                base_params={"version": version},
+            )
 
     def _capture_tags(self) -> None:
         self._get("tags_count", "/v2/tags/count")

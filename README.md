@@ -31,6 +31,11 @@ uv run --no-editable mdb-sync capture
 The `--no-editable` option is required on both commands. It avoids a Homebrew
 Python issue where hidden editable-install `.pth` files are skipped.
 
+The default capture is a bounded first pass. It captures the model graph and
+term lists, but skips the high-volume per-term detail, tag, CDE PV, and direct
+ID lookup phases. This is the recommended command for the first useful capture
+from the protected STS environment.
+
 The command prints progress for every completed request. When it finishes, it
 prints a path similar to:
 
@@ -60,15 +65,27 @@ uv run --no-editable mdb-sync --base-url https://another-host.example capture
 
 ## What the comprehensive capture traverses
 
-The crawler starts from model and tag discovery, then supplies discovered
-parameters to dependent endpoints:
+The default `capture` command uses the `first-pass` profile. It starts from
+model discovery, then supplies discovered parameters to dependent model
+endpoints:
 
 - model list and count;
 - model versions and latest-version metadata;
 - nodes, node counts, and node details;
 - properties, property counts, and property details;
-- terms, term counts, and individual term-value lookups;
-- model/property PV and synonym responses;
+- terms and term counts;
+- model/property PV and synonym responses.
+
+The full traversal is intentionally opt-in because it can generate hundreds of
+thousands of requests:
+
+```bash
+uv run --no-editable mdb-sync capture --profile comprehensive
+```
+
+Comprehensive mode also attempts:
+
+- individual term-value lookups;
 - tags, tag values, tagged entities, and counts;
 - direct `/v2/id/{id}` lookups for every discovered nanoid;
 - CDE PV responses when terms expose both `origin_id` and `origin_version`.
@@ -110,6 +127,7 @@ from captures.
 
 ```bash
 uv run --no-editable mdb-sync capture \
+  --profile first-pass \
   --page-size 100 \
   --timeout 120 \
   --retries 3 \
@@ -119,6 +137,18 @@ uv run --no-editable mdb-sync capture \
 
 Use `--quiet` to suppress per-request progress. Avoid raising `--page-size`
 without confirmation from the STS owners.
+
+Optional deeper phases can be enabled individually:
+
+```bash
+uv run --no-editable mdb-sync capture --include-term-details
+uv run --no-editable mdb-sync capture --include-tags
+uv run --no-editable mdb-sync capture --include-cde-pvs
+uv run --no-editable mdb-sync capture --include-ids
+```
+
+Use `--skip-model-pvs` if `/v2/terms/model-pvs/{model}/{property}` is too slow
+or not needed for a particular run.
 
 ## Small connectivity test
 

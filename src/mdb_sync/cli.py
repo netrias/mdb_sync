@@ -78,6 +78,40 @@ def _parser() -> argparse.ArgumentParser:
         help="OpenAPI file copied into the capture when present.",
     )
     capture_parser.add_argument(
+        "--profile",
+        choices=("first-pass", "comprehensive"),
+        default="first-pass",
+        help=(
+            "Capture depth. first-pass skips high-volume term-detail, tag, CDE PV, "
+            "and id lookups; comprehensive attempts all discoverable endpoints."
+        ),
+    )
+    capture_parser.add_argument(
+        "--include-term-details",
+        action="store_true",
+        help="Fetch every /term/{value} detail. This can add hundreds of thousands of requests.",
+    )
+    capture_parser.add_argument(
+        "--include-tags",
+        action="store_true",
+        help="Capture tags, tag values, and tagged entities.",
+    )
+    capture_parser.add_argument(
+        "--include-ids",
+        action="store_true",
+        help="Fetch /v2/id/{nanoid} for every discovered nanoid.",
+    )
+    capture_parser.add_argument(
+        "--include-cde-pvs",
+        action="store_true",
+        help="Capture CDE permissible values discovered from term origin IDs.",
+    )
+    capture_parser.add_argument(
+        "--skip-model-pvs",
+        action="store_true",
+        help="Skip /v2/terms/model-pvs/{model}/{property} calls.",
+    )
+    capture_parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress per-request progress output.",
@@ -159,6 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"Capturing STS v2 responses under {writer.root}", file=sys.stderr)
             exit_code = 0
+            crawler: STSCrawler | None = None
             try:
                 with STSClient(args.base_url, timeout_seconds=args.timeout) as client:
                     recording_client = RecordingSTSClient(
@@ -169,29 +204,40 @@ def main(argv: Sequence[str] | None = None) -> int:
                         delay_seconds=args.delay,
                         progress=None if args.quiet else _print_progress,
                     )
-                    inventory = STSCrawler(
+                    comprehensive = args.profile == "comprehensive"
+                    crawler = STSCrawler(
                         recording_client,
                         page_size=args.page_size,
-                    ).run()
+                        capture_term_details=comprehensive or args.include_term_details,
+                        capture_tags=comprehensive or args.include_tags,
+                        capture_ids=comprehensive or args.include_ids,
+                        capture_cde_pvs=comprehensive or args.include_cde_pvs,
+                        capture_model_pvs=not args.skip_model_pvs,
+                    )
+                    inventory = crawler.run()
             except KeyboardInterrupt:
+                reason = "Capture interrupted by the operator."
                 writer.record_skip(
                     endpoint="capture",
-                    reason="Capture interrupted by the operator.",
+                    reason=reason,
                 )
-                inventory = {
-                    "incomplete": True,
-                    "reason": "Capture interrupted by the operator.",
-                }
+                inventory = (
+                    crawler.current_inventory(incomplete_reason=reason)
+                    if crawler is not None
+                    else {"incomplete": True, "reason": reason}
+                )
                 exit_code = 130
             except Exception as error:
+                reason = f"{type(error).__name__}: {error}"
                 writer.record_skip(
                     endpoint="capture",
-                    reason=f"Fatal crawler error: {type(error).__name__}: {error}",
+                    reason=f"Fatal crawler error: {reason}",
                 )
-                inventory = {
-                    "incomplete": True,
-                    "reason": f"{type(error).__name__}: {error}",
-                }
+                inventory = (
+                    crawler.current_inventory(incomplete_reason=reason)
+                    if crawler is not None
+                    else {"incomplete": True, "reason": reason}
+                )
                 exit_code = 1
             writer.write_inventory(inventory)
             capture_dir, archive = writer.finalize()
