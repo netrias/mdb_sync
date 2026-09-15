@@ -186,6 +186,74 @@ def test_crawler_captures_full_discoverable_traversal(tmp_path: Path) -> None:
     assert manifest["statuses"] == {"200": len(expected_paths)}
 
 
+def test_crawler_deduplicates_model_rows_by_handle(tmp_path: Path) -> None:
+    request_counts: dict[str, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        request_counts[path] = request_counts.get(path, 0) + 1
+        assert path.startswith("/v2/")
+
+        responses: dict[str, object] = {
+            "/v2/models/count": 1,
+            # /v2/models/ returns one row per model *version*, so the same
+            # handle repeats across rows.
+            "/v2/models/": [
+                {"type": "Model", "handle": "c3dc", "version": "1.4.0", "nanoid": "m1"},
+                {"type": "Model", "handle": "c3dc", "version": "2.0.0", "nanoid": "m2"},
+                {"type": "Model", "handle": "c3dc", "version": "2.0.1", "nanoid": "m3"},
+                {"type": "Model", "handle": "c3dc", "version": "2.1.0", "nanoid": "m4"},
+            ],
+            "/v2/model/c3dc/latest-version": {
+                "type": "Model",
+                "handle": "c3dc",
+                "version": "2.1.0",
+                "nanoid": "m4",
+            },
+            "/v2/model/c3dc/versions": ["1.4.0", "2.0.0", "2.0.1", "2.1.0"],
+        }
+        for version in ("1.4.0", "2.0.0", "2.0.1", "2.1.0"):
+            prefix = f"/v2/model/c3dc/version/{version}"
+            responses[f"{prefix}/nodes/count"] = 0
+            responses[f"{prefix}/nodes"] = []
+        return httpx.Response(200, json=responses[path])
+
+    writer = CaptureWriter(
+        tmp_path,
+        base_url="https://sts.cancer.gov",
+        page_size=100,
+    )
+    with STSClient(
+        "https://sts.cancer.gov",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        crawler = STSCrawler(
+            RecordingSTSClient(client, writer, retries=0),
+            page_size=100,
+        )
+        inventory = crawler.run()
+
+    # The handle-discovery endpoints must be hit once, not once per duplicate row.
+    assert request_counts["/v2/model/c3dc/latest-version"] == 1
+    assert request_counts["/v2/model/c3dc/versions"] == 1
+
+    # Each version's node traversal still happens exactly once.
+    for version in ("1.4.0", "2.0.0", "2.0.1", "2.1.0"):
+        assert request_counts[f"/v2/model/c3dc/version/{version}/nodes"] == 1
+
+    # All four versions must still be captured, just without repeating the
+    # /versions traversal for each duplicate handle row.
+    assert len(inventory["models"]) == 1
+    model_inventory = inventory["models"][0]
+    assert model_inventory["handle"] == "c3dc"
+    captured_versions = {version["version"] for version in model_inventory["versions"]}
+    assert captured_versions == {"1.4.0", "2.0.0", "2.0.1", "2.1.0"}
+
+    # Skipping duplicate rows must not drop the nanoids they carry, since each
+    # row is a distinct entity that the --include-ids phase would look up.
+    assert inventory["discovered_nanoids"] == ["m1", "m2", "m3", "m4"]
+
+
 def test_crawler_first_pass_skips_high_volume_dependent_traversal(tmp_path: Path) -> None:
     requested_paths: list[str] = []
 
