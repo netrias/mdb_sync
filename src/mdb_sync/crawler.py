@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import sys
 from typing import Any
 from urllib.parse import quote
 
@@ -126,31 +127,23 @@ class STSCrawler:
     def _capture_models(self) -> None:
         self._get("models_count", "/v2/models/count")
         models = list(self._paginate("models", "/v2/models/"))
-        seen_handles: set[str] = set()
+
+        # Deduplicate upfront — one entry per handle, first occurrence wins
+        unique: dict[str, dict[str, Any]] = {}
         for model in models:
             handle = _identifier(model, "handle")
             self._remember_nanoid(model)
-            if handle is not None and handle in seen_handles:
-                # /v2/models/ returns one row per model version, so the same
-                # handle repeats. Every version is still captured below via
-                # /v2/model/{handle}/versions, so re-traversing a repeated
-                # handle only duplicates work.
-                continue
+            if handle is not None and handle not in unique:
+                unique[handle] = model
 
+        for handle, model in unique.items():
+            print(f"DEBUG: first encounter of handle={handle!r}", file=sys.stderr)
             model_inventory: dict[str, Any] = {
                 "handle": handle,
                 "name": _identifier(model, "name"),
                 "versions": [],
             }
             self.inventory["models"].append(model_inventory)
-            if handle is None:
-                self._client.record_skip(
-                    endpoint="model_traversal",
-                    reason="A model response had no handle.",
-                )
-                continue
-            seen_handles.add(handle)
-
             encoded_model = _segment(handle)
             latest_model = self._get(
                 "model_latest_version",
