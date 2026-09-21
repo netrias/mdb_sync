@@ -5,6 +5,11 @@
 This repository captures the protected STS v2 API into an offline development
 dataset. It does not yet transform or write data to the Data Model Store.
 
+Only the latest version of each model is traversed unless `--all-versions` is
+given. The latest version comes from `/latest-version`, falling back to the
+`is_latest_version` row in the model listing; it is never inferred from version
+string ordering.
+
 ```text
 CLI
   -> STSCrawler
@@ -59,8 +64,10 @@ preserves undocumented fields, null behavior, errors, content types, and other
 details needed to build realistic fixtures later.
 
 The JSON Lines request log maps each body to request metadata and supports
-streaming analysis even when a capture is large. The inventory provides a
-smaller navigation index without replacing raw responses.
+streaming analysis even when a capture is large. Bodies live in one
+append-only `responses.jsonl`, and each request records the byte offset of its
+own body, so a single response can be read without scanning the file. The
+inventory provides a smaller navigation index without replacing raw responses.
 
 Sensitive headers are removed. Response hashes allow archive integrity and
 duplicate-response analysis.

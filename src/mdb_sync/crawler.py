@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import sys
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import quote
 
@@ -21,6 +21,19 @@ def _identifier(item: Any, field: str) -> str | None:
     return str(value) if value is not None and str(value) else None
 
 
+def _latest_versions_from_listing(models: list[Any]) -> dict[str, str]:
+    """Latest version per handle, used when /latest-version gives no version."""
+    latest: dict[str, str] = {}
+    for row in models:
+        if not isinstance(row, dict) or not row.get("is_latest_version"):
+            continue
+        handle = _identifier(row, "handle")
+        version = _identifier(row, "version")
+        if handle is not None and version is not None:
+            latest[handle] = version
+    return latest
+
+
 class STSCrawler:
     """Traverse all v2 endpoints whose parameters can be discovered from STS."""
 
@@ -35,6 +48,7 @@ class STSCrawler:
         capture_ids: bool = False,
         capture_cde_pvs: bool = False,
         capture_model_pvs: bool = True,
+        capture_all_versions: bool = False,
     ) -> None:
         if page_size <= 0:
             raise ValueError("page_size must be positive")
@@ -48,6 +62,7 @@ class STSCrawler:
         self._capture_ids_enabled = capture_ids
         self._capture_cde_pvs_enabled = capture_cde_pvs
         self._capture_model_pvs_enabled = capture_model_pvs
+        self._capture_all_versions = capture_all_versions
         self._seen_nanoids: set[str] = set()
         self._cde_candidates: set[tuple[str, str]] = set()
         self.inventory: dict[str, Any] = {
@@ -60,6 +75,7 @@ class STSCrawler:
                 "404 responses for properties without acceptable values are expected.",
             ],
             "options": {
+                "capture_all_versions": self._capture_all_versions,
                 "capture_cde_pvs": self._capture_cde_pvs_enabled,
                 "capture_ids": self._capture_ids_enabled,
                 "capture_model_pvs": self._capture_model_pvs_enabled,
@@ -123,10 +139,19 @@ class STSCrawler:
                     "or --profile comprehensive."
                 ),
             )
+        if not self._capture_all_versions:
+            self._client.record_skip(
+                endpoint="model_version_traversal",
+                reason=(
+                    "Only the latest version of each model was traversed. "
+                    "Enable every version with --all-versions."
+                ),
+            )
 
     def _capture_models(self) -> None:
         self._get("models_count", "/v2/models/count")
         models = list(self._paginate("models", "/v2/models/"))
+        latest_by_handle = _latest_versions_from_listing(models)
 
         # Deduplicate upfront — one entry per handle, first occurrence wins
         unique: dict[str, dict[str, Any]] = {}
@@ -156,16 +181,51 @@ class STSCrawler:
                     f"/v2/model/{encoded_model}/versions",
                 )
             )
-            for version_value in versions:
-                version = str(version_value) if version_value is not None else ""
-                if not version:
-                    self._client.record_skip(
-                        endpoint="model_version_traversal",
-                        reason=f"Model {handle!r} returned an empty version.",
-                    )
-                    continue
+            selected = self._versions_to_capture(
+                handle,
+                latest_model,
+                versions,
+                latest_by_handle,
+            )
+            for version in selected:
                 version_inventory = self._capture_version(handle, version)
                 model_inventory["versions"].append(version_inventory)
+
+    def _versions_to_capture(
+        self,
+        handle: str,
+        latest_model: Any,
+        versions: list[Any],
+        latest_by_handle: dict[str, str],
+    ) -> list[str]:
+        """Every returned version, or only the latest one."""
+        available: list[str] = []
+        for version_value in versions:
+            version = str(version_value) if version_value is not None else ""
+            if not version:
+                self._client.record_skip(
+                    endpoint="model_version_traversal",
+                    reason=f"Model {handle!r} returned an empty version.",
+                )
+                continue
+            available.append(version)
+
+        if self._capture_all_versions:
+            return available
+
+        # Version strings do not sort meaningfully, so the latest is never
+        # guessed from ordering: it comes from STS or from the listing flag.
+        latest = _identifier(latest_model, "version") or latest_by_handle.get(handle)
+        if latest is None:
+            self._client.record_skip(
+                endpoint="model_version_traversal",
+                reason=(
+                    f"Model {handle!r} exposed no latest version, so no version was "
+                    "traversed. Use --all-versions to traverse every version."
+                ),
+            )
+            return []
+        return [latest]
 
     def _capture_version(self, model: str, version: str) -> dict[str, Any]:
         prefix = f"/v2/model/{_segment(model)}/version/{_segment(version)}"

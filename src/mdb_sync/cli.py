@@ -112,6 +112,14 @@ def _parser() -> argparse.ArgumentParser:
         help="Skip /v2/terms/model-pvs/{model}/{property} calls.",
     )
     capture_parser.add_argument(
+        "--all-versions",
+        action="store_true",
+        help=(
+            "Traverse every version of every model. The default traverses only "
+            "the latest version, which is far smaller."
+        ),
+    )
+    capture_parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress per-request progress output.",
@@ -213,6 +221,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         capture_ids=comprehensive or args.include_ids,
                         capture_cde_pvs=comprehensive or args.include_cde_pvs,
                         capture_model_pvs=not args.skip_model_pvs,
+                        capture_all_versions=args.all_versions,
                     )
                     inventory = crawler.run()
             except KeyboardInterrupt:

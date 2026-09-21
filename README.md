@@ -71,6 +71,7 @@ endpoints:
 
 - model list and count;
 - model versions and latest-version metadata;
+- the latest version of each model only, unless `--all-versions` is given;
 - nodes, node counts, and node details;
 - properties, property counts, and property details;
 - terms and term counts;
@@ -107,7 +108,7 @@ Each timestamped capture contains:
 manifest.json       Run metadata, status totals, endpoint coverage, and skips
 requests.jsonl      One metadata record per attempted logical request
 inventory.json      Discovered model/version/node/property and tag inventory
-responses/          Exact response bodies, numbered to match requests.jsonl
+responses.jsonl     Exact response bodies, one record per successful response
 openapi.json        The OpenAPI document used during development
 ```
 
@@ -118,7 +119,11 @@ openapi.json        The OpenAPI document used during development
 - elapsed time and retry-attempt count;
 - sanitized response headers;
 - response byte count and SHA-256 hash;
-- path to the corresponding exact response body.
+- byte offset of the matching record in `responses.jsonl`.
+
+Each `responses.jsonl` record holds the response `sequence`, `content_type`,
+`sha256`, byte count, and the exact body. Bodies that are not valid UTF-8 are
+stored as `base64` instead of `body`, so every byte round-trips either way.
 
 Authorization, cookie, proxy-authorization, and set-cookie headers are excluded
 from captures.
@@ -149,6 +154,13 @@ uv run --no-editable mdb-sync capture --include-ids
 
 Use `--skip-model-pvs` if `/v2/terms/model-pvs/{model}/{property}` is too slow
 or not needed for a particular run.
+
+Only the latest version of each model is traversed. A model with fifteen
+versions costs one traversal, not fifteen. To traverse every version:
+
+```bash
+uv run --no-editable mdb-sync capture --all-versions
+```
 
 ## Small connectivity test
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import platform
@@ -36,7 +37,7 @@ class CaptureResult:
     url: str
     status_code: int | None
     elapsed_ms: int
-    response_file: str | None
+    response_offset: int | None
     response_headers: dict[str, str]
     response_sha256: str | None
     response_bytes: int
@@ -58,10 +59,12 @@ class CaptureWriter:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         self.started_at = datetime.now(UTC)
         self.root = output_parent / f"sts-capture-{timestamp}"
-        self.responses_dir = self.root / "responses"
-        self.responses_dir.mkdir(parents=True, exist_ok=False)
+        self.root.mkdir(parents=True, exist_ok=False)
         self._records_path = self.root / "requests.jsonl"
         self._records_path.touch()
+        self._responses_path = self.root / "responses.jsonl"
+        self._responses_path.touch()
+        self._responses_bytes = 0
         self._request_count = 0
         self._response_bytes = 0
         self._statuses: Counter[str] = Counter()
@@ -87,11 +90,8 @@ class CaptureWriter:
         attempts: int,
     ) -> CaptureResult:
         sequence = self._request_count + 1
-        media_type = response.headers.get("content-type", "").lower()
-        suffix = ".json" if "json" in media_type else ".bin"
-        relative_file = Path("responses") / f"{sequence:06d}{suffix}"
         body = response.content
-        (self.root / relative_file).write_bytes(body)
+        offset = self._append_response_body(sequence, response, body)
 
         result = CaptureResult(
             sequence=sequence,
@@ -101,7 +101,7 @@ class CaptureWriter:
             url=str(response.request.url),
             status_code=response.status_code,
             elapsed_ms=elapsed_ms,
-            response_file=str(relative_file),
+            response_offset=offset,
             response_headers=self._sanitize_headers(response.headers),
             response_sha256=hashlib.sha256(body).hexdigest(),
             response_bytes=len(body),
@@ -130,7 +130,7 @@ class CaptureWriter:
             url=url,
             status_code=None,
             elapsed_ms=elapsed_ms,
-            response_file=None,
+            response_offset=None,
             response_headers={},
             response_sha256=None,
             response_bytes=0,
@@ -142,6 +142,31 @@ class CaptureWriter:
 
     def record_skip(self, *, endpoint: str, reason: str) -> None:
         self._skipped.append({"endpoint": endpoint, "reason": reason})
+
+    def _append_response_body(
+        self,
+        sequence: int,
+        response: httpx.Response,
+        body: bytes,
+    ) -> int:
+        """Append one body to responses.jsonl and return its byte offset."""
+        record: dict[str, Any] = {
+            "sequence": sequence,
+            "content_type": response.headers.get("content-type", ""),
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "bytes": len(body),
+        }
+        try:
+            record["body"] = body.decode("utf-8")
+        except UnicodeDecodeError:
+            # Bytes that are not UTF-8 still round-trip exactly through base64.
+            record["base64"] = base64.b64encode(body).decode("ascii")
+        line = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+        offset = self._responses_bytes
+        with self._responses_path.open("ab") as stream:
+            stream.write(line)
+        self._responses_bytes += len(line)
+        return offset
 
     def write_inventory(self, inventory: dict[str, Any]) -> None:
         self._write_json(self.root / "inventory.json", inventory)
@@ -169,7 +194,7 @@ class CaptureWriter:
             "files": {
                 "request_log": "requests.jsonl",
                 "inventory": "inventory.json",
-                "responses": "responses/",
+                "responses": "responses.jsonl",
                 "openapi": "openapi.json" if self._openapi_sha256 else None,
             },
         }
